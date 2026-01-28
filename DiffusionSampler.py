@@ -132,12 +132,15 @@ class DiffusionModelSampler:
         """Prepare the prompt and reward functions."""
         # Retrieve the prompt function from ddpo_pytorch.prompts using the config
         self.prompt_fn = getattr(prompts_file, self.config.prompt_fn)
-        self.eval_prompts, self.eval_prompt_metadata = zip(
-                *[
-                    self.prompt_fn(i) 
-                    for i in range(self.config.sample.batch_size * self.config.max_vis_images)
-                ]
-            ) # Use fixed set of evaluation prompts
+        # self.eval_prompts, self.eval_prompt_metadata = zip(
+        #         *[
+        #             self.prompt_fn(i) 
+        #             for i in range(self.config.sample.batch_size * self.config.max_vis_images)
+        #         ]
+        #     ) # Use fixed set of evaluation prompts
+        print(f"Hard coded prompts to length 60, assuming OPI")
+        assert self.config.prompt_fn == "open_image_prefs_60"
+        self.eval_prompts, self.eval_prompt_metadata = zip(*[(self.prompt_fn(i), {}) for i in range(60)])
 
         # Retrieve the reward function from ddpo_pytorch.rewards using the config
         print(f"Using reward function {self.config.reward_fn}")
@@ -152,7 +155,7 @@ class DiffusionModelSampler:
             # self.loss_fn = rewards.aesthetic_score(torch_dtype=self.inference_dtype, device = self.accelerator.device, return_loss=True)
         elif (self.config.reward_fn=='clip' or self.config.reward_fn=='clip_score'): # 20 * clip
             self.clip_fn = rewards.clip_score(inference_dtype=self.inference_dtype, device = self.accelerator.device)
-            self.reward_fn = lambda images, prompts: 20 * self.clip_fn(images, prompts)
+            self.reward_fn = lambda images, prompts: self.clip_fn(images, prompts)
         elif (self.config.reward_fn=='multi'): # w * aesthetic + (1-w) * 20 * clip
             self.aesthetic_fn = rewards.aesthetic_score(torch_dtype=self.inference_dtype, device = self.accelerator.device)
             self.clip_fn = rewards.clip_score(inference_dtype=self.inference_dtype, device = self.accelerator.device)
@@ -278,19 +281,16 @@ class DiffusionModelSampler:
             * self.config.max_vis_images
         )
 
-        self.logger.info("***** Running Sampling *****")
-        self.logger.info(f"  Sample batch size per device = {self.config.sample.batch_size}")
-
-        self.logger.info("")
-        self.logger.info(f"  Total number of samples for evaluation = {samples_per_eval}")
+        # self.logger.info("***** Running Sampling *****" )
+        # self.logger.info(f"  Sample batch size per device = {self.config.sample.batch_size}")
+        # self.logger.info("")
+        # self.logger.info(f"  Total number of samples for evaluation = {samples_per_eval}")
 
         self.logger.info(f"Using pre-trained model {self.config.pretrained.model}")
-
-
 
         self.info_eval = defaultdict(list)
         self.info_eval_vis = defaultdict(list)
         self.sample_images(train=False)
 
         # Log evaluation-related stuff
-        self.log_evaluation()
+        # self.log_evaluation()

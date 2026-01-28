@@ -3,6 +3,7 @@ import os
 import functools
 import random
 import inflect
+import json
 
 IE = inflect.engine()
 ASSETS_PATH = resources.files("assets")
@@ -21,6 +22,24 @@ def _load_lines(path):
     with open(path, "r") as f:
         return [line.strip() for line in f.readlines()]
 
+def load_json_prompts(prompt_path, max_prompts=None):
+	if prompt_path.endswith(".json"):
+		with open(prompt_path, "r") as f:
+			data = json.load(f)
+	else:
+		assert prompt_path.endswith(".jsonl")
+		with open(prompt_path, "r") as f:
+			data = [json.loads(line) for line in f]
+	assert isinstance(data, list)
+	prompt_key = "prompt"
+	if prompt_key not in data[0]:
+		assert "text" in data[0], "Prompt data should have 'prompt' or 'text' key"
+
+		for item in data:
+			item["prompt"] = item["text"]
+	if max_prompts is not None:
+		data = data[:max_prompts]
+	return data
 
 def from_file(path, low=None, high=None, all=False):
     prompts = _load_lines(path)[low:high]
@@ -39,6 +58,13 @@ def simple_animals(idx):
 
 def eval_simple_animals(idx):
     return from_file("eval_simple_animals.txt")
+
+_opi_60_json = None
+def open_image_prefs_60(idx):
+    global _opi_60_json
+    if _opi_60_json is None:
+        _opi_60_json = load_json_prompts("assets/open_img_pref_sampled_60.jsonl")
+    return _opi_60_json[idx]["prompt"]
 
 def eval_hps_v2_all(idx):
     return from_file("hps_v2_all_eval.txt")

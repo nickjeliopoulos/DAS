@@ -8,7 +8,7 @@ def general():
 
     ###### General ######
     config.project_name = "DiffusionSampleBaseline"
-    config.max_vis_images = 2
+    config.max_vis_images = 1
     config.run_name = ""
     
     # prompting
@@ -34,7 +34,7 @@ def general():
     # being fully deterministic and 1.0 being equivalent to the DDPM sampler.
     sample.eta = 1.0
     # classifier-free guidance weight. 1.0 is no guidance.
-    sample.guidance_scale = 5.0
+    sample.guidance_scale = 7.5
     # batch size (per GPU!) to use for sampling.
     sample.batch_size = 1
 

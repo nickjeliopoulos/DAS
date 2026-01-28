@@ -44,65 +44,71 @@ class DAS(DiffusionModelSampler):
 
     def sample_images(self, train=False):
         """Sample images using the diffusion model."""
-        
-        samples = []
+        self.pipeline.unet.eval()
 
-        num_prompts_per_gpu = 1 if self.config.smc.num_particles >= self.config.sample.batch_size else int(self.config.sample.batch_size / self.config.smc.num_particles)
-        batch_p = min(self.config.smc.num_particles, self.config.sample.batch_size)
+        num_particles = int(self.config.smc.num_particles)
+        prompts_all = list(self.eval_prompts)
 
-        # Generate prompts and latents
-        prompts, prompt_metadata = self.eval_prompts, self.eval_prompt_metadata
-
-        latents_0 = torch.randn(
-            (self.config.smc.num_particles*self.config.max_vis_images, self.pipeline.unet.config.in_channels, self.pipeline.unet.sample_size, self.pipeline.unet.sample_size),
-            device=self.accelerator.device,
-            dtype=self.inference_dtype,
-        )
+        # print(f"Eval Prompts: {prompts_all}")
 
         with torch.no_grad():
-            for vis_idx in tqdm(
-                range(self.config.max_vis_images//num_prompts_per_gpu),
-                desc=f"Sampling images",
+            for prompt in tqdm(
+                prompts_all,
+                desc="Sampling images",
                 disable=not self.accelerator.is_local_main_process,
                 position=0,
             ):
-                prompts_batch = prompts[vis_idx*num_prompts_per_gpu : (vis_idx+1)*num_prompts_per_gpu]
-                repeated_prompts = [prompt for prompt in prompts_batch for _ in range(batch_p)]
-                
-                latents_batch = latents_0[vis_idx*self.config.smc.num_particles*num_prompts_per_gpu : (vis_idx+1)*self.config.smc.num_particles*num_prompts_per_gpu]
-    
-                # convert reward function to get image as only input
-                image_reward_fn = lambda images: self.reward_fn(
-                    images, 
-                    repeated_prompts
+                print(f"Process Prompt: {prompt}")
+
+                # Generate a batch of images for this single prompt by running SMC multiple times.
+                # The current SMC pipeline implementation is safest in `batch_size=1` mode.
+                latents_0 = torch.randn(
+                    (
+                        num_particles,
+                        self.pipeline.unet.config.in_channels,
+                        self.pipeline.unet.sample_size,
+                        self.pipeline.unet.sample_size,
+                    ),
+                    device=self.accelerator.device,
+                    dtype=self.inference_dtype,
                 )
 
-                # Encode prompts
-                prompt_ids = self.pipeline.tokenizer(
-                    prompts_batch,
-                    return_tensors="pt",
+                prompt_inputs = self.pipeline.tokenizer(
+                    [prompt],
                     padding="max_length",
                     truncation=True,
                     max_length=self.pipeline.tokenizer.model_max_length,
-                ).input_ids.to(self.accelerator.device)
-                prompt_embeds = self.pipeline.text_encoder(prompt_ids)[0]
-                
-                # Sample images
+                    return_tensors="pt",
+                )
+
+                prompt_embeds = self.pipeline.text_encoder(
+                    prompt_inputs.input_ids.to(self.accelerator.device),
+                    attention_mask=prompt_inputs.attention_mask.to(self.accelerator.device),
+                )[0].to(self.inference_dtype)
+
+                # Convert reward function to accept only images. During SMC, rewards are computed
+                # for `batch_p` candidate images corresponding to the same prompt.
+                image_reward_fn = lambda images, _p=prompt: self.reward_fn(
+                    images,
+                    [_p] * images.shape[0],
+                )
+
                 with self.autocast():
                     images, log_w, normalized_w, latents, \
                     all_log_w, resample_indices, ess_trace, \
                     scale_factor_trace, rewards_trace, manifold_deviation_trace, log_prob_diffusion_trace \
                     = self.pipeline_using_smc(
                         self.pipeline,
-                        prompt=list(prompts_batch),
-                        negative_prompt=[""]*len(prompts_batch),
+                        # prompt=[prompt],
+                        negative_prompt=[""],
+                        prompt_embeds=prompt_embeds,
                         num_inference_steps=self.config.sample.num_steps,
                         guidance_scale=self.config.sample.guidance_scale,
                         eta=self.config.sample.eta,
                         output_type="pt",
-                        latents=latents_batch,
-                        num_particles=self.config.smc.num_particles,
-                        batch_p=batch_p,
+                        latents=latents_0,
+                        num_particles=num_particles,
+                        batch_p=num_particles,
                         resample_strategy=self.config.smc.resample_strategy,
                         ess_threshold=self.config.smc.ess_threshold,
                         tempering=self.config.smc.tempering,
@@ -111,62 +117,92 @@ class DAS(DiffusionModelSampler):
                         tempering_start=self.config.smc.tempering_start,
                         reward_fn=image_reward_fn,
                         kl_coeff=self.config.smc.kl_coeff,
-                        verbose=self.config.smc.verbose
+                        verbose=False,
                     )
+
                 self.info_eval_vis["eval_ess"].append(ess_trace)
                 self.info_eval_vis["scale_factor_trace"].append(scale_factor_trace)
                 self.info_eval_vis["rewards_trace"].append(rewards_trace)
                 self.info_eval_vis["manifold_deviation_trace"].append(manifold_deviation_trace)
                 self.info_eval_vis["log_prob_diffusion_trace"].append(log_prob_diffusion_trace)
 
-                rewards = self.reward_fn(images, prompts_batch)
-                
+                rewards = self.reward_fn(images, [prompt])
+
                 self.info_eval_vis["eval_rewards_img"].append(rewards.clone().detach())
                 self.info_eval_vis["eval_image"].append(images.clone().detach())
-                self.info_eval_vis["eval_prompts"] = list(self.info_eval_vis["eval_prompts"]) + list(prompts_batch)
+                self.info_eval_vis["eval_prompts"].append(prompt)
+
+                if self.accelerator.is_local_main_process:
+                    reward_value = rewards.mean().detach().cpu().item()
+                    image_tensor = images[0].detach().float().cpu()
+                    image_tensor = ((image_tensor.clamp(-1, 1) + 1) / 2 * 255).clamp(0, 255).to(torch.uint8)
+                    image_pil = Image.fromarray(image_tensor.permute(1, 2, 0).numpy())
+
+                    log_payload = {
+                        "eval/current_reward": reward_value,
+                        "eval/current_prompt": prompt,
+                    }
+
+                    if wandb.run is not None:
+                        log_payload["eval/current_image"] = wandb.Image(image_pil, caption=prompt)
+                        wandb.log(log_payload)
+                    else:
+                        print(f"Prompt: {prompt} | Reward: {reward_value}")
+        
+        # ### Stats?
+        # eval_images_stats = self.info_eval_vis["eval_image"]
+        # print(f"Eval Image Length: {len(eval_images_stats)}")
 
     def log_evaluation(self, epoch=None, inner_epoch=None):
-        super().log_evaluation(epoch=None, inner_epoch=None)
-
         rewards = torch.cat(self.info_eval_vis["eval_rewards_img"])
         prompts = self.info_eval_vis["eval_prompts"]
+        # ess_trace = torch.cat(self.info_eval_vis["eval_ess"])
+        # scale_factor_trace = torch.cat(self.info_eval_vis["scale_factor_trace"])
+        # rewards_trace = torch.cat(self.info_eval_vis["rewards_trace"])
+        # manifold_deviation_trace = torch.cat(self.info_eval_vis["manifold_deviation_trace"])
+        # log_prob_diffusion_trace = torch.cat(
+        #     self.info_eval_vis["log_prob_diffusion_trace"]
+        # )
 
-        ess_trace = torch.cat(self.info_eval_vis["eval_ess"])
-        scale_factor_trace = torch.cat(self.info_eval_vis["scale_factor_trace"])
-        rewards_trace = torch.cat(self.info_eval_vis["rewards_trace"])
-        manifold_deviation_trace = torch.cat(self.info_eval_vis["manifold_deviation_trace"])
-        log_prob_diffusion_trace = torch.cat(self.info_eval_vis["log_prob_diffusion_trace"])
+    # def log_evaluation(self, epoch=None, inner_epoch=None):
+    #     super().log_evaluation(epoch=None, inner_epoch=None)
+
+    #     rewards = torch.cat(self.info_eval_vis["eval_rewards_img"])
+    #     prompts = self.info_eval_vis["eval_prompts"]
+
+    #     ess_trace = torch.cat(self.info_eval_vis["eval_ess"])
+    #     scale_factor_trace = torch.cat(self.info_eval_vis["scale_factor_trace"])
+    #     rewards_trace = torch.cat(self.info_eval_vis["rewards_trace"])
+    #     manifold_deviation_trace = torch.cat(self.info_eval_vis["manifold_deviation_trace"])
+    #     log_prob_diffusion_trace = torch.cat(self.info_eval_vis["log_prob_diffusion_trace"])
         
-        for i, ess in enumerate(ess_trace):
+    #     for i, ess in enumerate(ess_trace):
 
-            fig, ax1 = plt.subplots()
-            ax2 = ax1.twinx()
+    #         fig, ax1 = plt.subplots()
+    #         ax2 = ax1.twinx()
 
-            ax1.plot(range(len(ess)), ess, 'b-')
-            caption = f"{i:03d}_{prompts[i]} | reward: {rewards[i]}"
-            os.makedirs(f"{self.log_dir}/{caption}", exist_ok=True)
+    #         ax1.plot(range(len(ess)), ess, 'b-')
+    #         caption = f"{i:03d}_{prompts[i]} | reward: {rewards[i]}"
+    #         os.makedirs(f"{self.log_dir}/{caption}", exist_ok=True)
 
-            plt.savefig(f"{self.log_dir}/{caption}/ess.png")
-            plt.clf()
+    #         plt.savefig(f"{self.log_dir}/{caption}/ess.png")
+    #         plt.clf()
 
-            plt.plot(rewards_trace[i])
-            plt.savefig(f"{self.log_dir}/{caption}/intermediate_rewards.png")
-            plt.clf()
+    #         plt.plot(rewards_trace[i])
+    #         plt.savefig(f"{self.log_dir}/{caption}/intermediate_rewards.png")
+    #         plt.clf()
 
-            plt.plot(manifold_deviation_trace[i])
-            plt.savefig(f"{self.log_dir}/{caption}/manifold_deviation.png")
-            plt.clf()
+    #         plt.plot(manifold_deviation_trace[i])
+    #         plt.savefig(f"{self.log_dir}/{caption}/manifold_deviation.png")
+    #         plt.clf()
 
-            plt.plot(log_prob_diffusion_trace[i])
-            plt.savefig(f"{self.log_dir}/{caption}/log_prob_diffusion.png")
-            plt.clf()
+    #         plt.plot(log_prob_diffusion_trace[i])
+    #         plt.savefig(f"{self.log_dir}/{caption}/log_prob_diffusion.png")
+    #         plt.clf()
 
-            np.save(f"{self.log_dir}/{caption}/ess.npy", ess)
-            np.save(f"{self.log_dir}/{caption}/manifold_deviation.npy", manifold_deviation_trace[i])
-            np.save(f"{self.log_dir}/{caption}/log_prob_diffusion.npy", log_prob_diffusion_trace[i])
-
-
-
+    #         np.save(f"{self.log_dir}/{caption}/ess.npy", ess)
+    #         np.save(f"{self.log_dir}/{caption}/manifold_deviation.npy", manifold_deviation_trace[i])
+    #         np.save(f"{self.log_dir}/{caption}/log_prob_diffusion.npy", log_prob_diffusion_trace[i])
 
 FLAGS = flags.FLAGS
 config_flags.DEFINE_config_file("config", "config/sd.py", "Sampling configuration.")

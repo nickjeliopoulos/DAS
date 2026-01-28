@@ -1,5 +1,7 @@
 import ml_collections
-import imp
+### Deprecated, use importlib instaed
+# import imp
+# import importlib
 import os
 from config.general import general
 
@@ -8,7 +10,7 @@ def smc():
     config.project_name = "DAS_SD"
     config.smc = ml_collections.ConfigDict()
 
-    config.smc.num_particles = 4
+    config.smc.num_particles = 8
     config.smc.resample_strategy = "ssp"
     config.smc.ess_threshold = 0.5
     
@@ -19,11 +21,11 @@ def smc():
 
     config.smc.verbose = True
 
-    config.sample.num_steps = 100
-    config.sample.eta = 1.
+    config.sample.num_steps = 50
+    config.sample.eta = 1.0
 
-    config.sample.batch_size = 2
-    config.max_vis_images = 2
+    config.sample.batch_size = 1
+    config.max_vis_images = 1
 
     return config
 
@@ -40,7 +42,10 @@ def clip():
     print("CLIP Score")
     config = smc()
     config.reward_fn = "clip"
-    config.prompt_fn = "eval_hps_v2_all"
+    ### ORIGINAL
+    # config.prompt_fn = "eval_hps_v2_all"
+    ### REPLACED with OPI
+    config.prompt_fn = "open_image_prefs_60"
     
     config.smc.kl_coeff = 0.01
 
