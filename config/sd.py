@@ -82,7 +82,7 @@ def imagereward():
     ### REPLACED with OPI
     config.prompt_fn = "open_image_prefs_60"
     
-    config.smc.kl_coeff = 0.05
+    config.smc.kl_coeff = 0.005
 
     return config
 

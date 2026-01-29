@@ -205,8 +205,10 @@ def imagereward_score(
             max_length=256,
             return_tensors="pt",
         ).to(device)
+
+        # print(f"Images dtype: {images.dtype}\nInference dtype: {inference_dtype}")
         
-        img_tensor = imagereward_xform(images).to(inference_dtype)
+        img_tensor = imagereward_xform(images).to(torch.float32)
         rewards = imagereward_model.score_gard(
             prompt_attention_mask=text_input.attention_mask,
             prompt_ids=text_input.input_ids,
