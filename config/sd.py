@@ -19,7 +19,7 @@ def smc():
     config.smc.tempering_gamma = 0.008
     config.smc.tempering_start = 0
 
-    config.smc.verbose = True
+    config.smc.verbose = False
 
     config.sample.num_steps = 50
     config.sample.eta = 1.0
@@ -70,6 +70,19 @@ def pick():
     config.prompt_fn = "eval_hps_v2_all"
     
     config.smc.kl_coeff = 0.0001
+
+    return config
+
+def imagereward():
+    print("Using ImageReward")
+    config = smc()
+    config.reward_fn = "imagereward"
+    ### ORIGINAL
+    # config.prompt_fn = "eval_hps_v2_all"
+    ### REPLACED with OPI
+    config.prompt_fn = "open_image_prefs_60"
+    
+    config.smc.kl_coeff = 0.05
 
     return config
 

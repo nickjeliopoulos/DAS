@@ -20,7 +20,7 @@ def _left_broadcast(t, shape):
     assert t.ndim <= len(shape)
     return t.reshape(t.shape + (1,) * (len(shape) - t.ndim)).broadcast_to(shape)
 
-@torch.no_grad()
+# @torch.no_grad()
 def pipeline_using_smc(
     self: StableDiffusionPipeline,
     prompt: Union[str, List[str]] = None,

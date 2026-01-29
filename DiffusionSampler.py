@@ -156,6 +156,8 @@ class DiffusionModelSampler:
         elif (self.config.reward_fn=='clip' or self.config.reward_fn=='clip_score'): # 20 * clip
             self.clip_fn = rewards.clip_score(inference_dtype=self.inference_dtype, device = self.accelerator.device)
             self.reward_fn = lambda images, prompts: self.clip_fn(images, prompts)
+        elif self.config.reward_fn == "imagereward":
+            self.reward_fn = rewards.imagereward_score(inference_dtype=self.inference_dtype, device=self.accelerator.device)
         elif (self.config.reward_fn=='multi'): # w * aesthetic + (1-w) * 20 * clip
             self.aesthetic_fn = rewards.aesthetic_score(torch_dtype=self.inference_dtype, device = self.accelerator.device)
             self.clip_fn = rewards.clip_score(inference_dtype=self.inference_dtype, device = self.accelerator.device)

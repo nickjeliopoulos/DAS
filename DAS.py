@@ -152,6 +152,16 @@ class DAS(DiffusionModelSampler):
         # ### Stats?
         # eval_images_stats = self.info_eval_vis["eval_image"]
         # print(f"Eval Image Length: {len(eval_images_stats)}")
+        rewards_tensor = torch.cat(self.info_eval_vis["eval_rewards_img"])
+        reward_stats = {
+            "eval/reward_mean": rewards_tensor.mean().item(),
+            "eval/reward_max": rewards_tensor.max().item(),
+            "eval/reward_min": rewards_tensor.min().item(),
+            "eval/reward_median": torch.median(rewards_tensor).item(),
+        }
+        if wandb.run is not None:
+            wandb.log(reward_stats)
+
 
     def log_evaluation(self, epoch=None, inner_epoch=None):
         rewards = torch.cat(self.info_eval_vis["eval_rewards_img"])
